@@ -1,38 +1,92 @@
-from sqlalchemy import Column, Integer, String
-from sqlalchemy.orm import relationship
-from database.connection import session
-from database.connection import Base
+from database.connection import get_db_connection
 
+class Author:
+    def __init__(self, id, name = ""):
+        # Connect to the database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM authors WHERE id = ? LIMIT 1", [id])
+        author = cursor.fetchone()
 
-class Author(Base):
-    __tablename__="authors"
+        if author:
+            self._id = author['id']
+            self._name = author['name']
+        else:
+            # Allows for validation
+            self._id = 0
+            self.name = name
+            
+            # Create an author
+            cursor.execute('INSERT INTO authors (name) VALUES (?)', (name,))
+            conn.commit()
+            self._id = cursor.lastrowid # Use this to fetch the id of the newly created author
+        
+        cursor.close()    
 
-    id = Column(Integer, primary_key=True)
-    name=Column(String, nullable=False)
-
-    article =relationship('Article', backref="author")
-
-    def __init__(self, id, name):
-        self.id = id
-        self.name = name
-
-    def __repr__(self):
-        return f'<Author {self.name}>'
+    @property
+    def id(self):
+        return self._id
+    
+    @id.setter
+    def id(self, id):
+        if hasattr(self, "id"):
+            raise ValueError("ID already set")
+        
+        if not isinstance(id, int):
+            raise TypeError("ID must be int")
+            
+        self._id = id
 
     @property
     def name(self):
         return self._name
-
+    
     @name.setter
-    def name(self,name):
-        if hasattr(self,"name"):
-            raise ValueError("name cannot be re-assgned")
-        if not isinstance(name,str) and not len(name)> 0:
-            raise ValueError("name must be a string")
-        self._name =name
+    def name(self, name):
+        if hasattr(self, "name"):
+            raise ValueError("Name already set")
+        
+        if not isinstance(name, str):
+            raise TypeError("Name must be string")
+        
+        if len(name) == 0:
+            raise ValueError("Name must be greater than 0 characters")
+        
+        self._name = name
 
-    def articles(self,session):
-        return session.query(Article).join(Author).filter(Article.author_id ==self.id).all()
+    def articles(self):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM articles WHERE author_id = ?", [self.id])
+        rows = cursor.fetchall()
+        conn.close()
+        articles = []
 
-    def magazines(self,session):
-        return session.query(Magazine).join(Author).filter(Article.author_id == self.id).all()
+        for article in rows:
+            temp = Article(article['id'])
+            articles.append(temp)
+
+        return articles
+
+    def magazines(self):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+                       SELECT m.id 
+                       FROM magazines m
+                       JOIN articles a ON a.magazine_id = m.id 
+                       WHERE a.author_id = ? 
+                       LIMIT 1
+                       ''', [self.id])
+        rows = cursor.fetchall()
+        conn.close()
+        magazines = []
+
+        for magazine in rows:
+            temp = Magazine(magazine['id'])
+            magazines.append(temp)
+
+        return magazines
+    
+    def __repr__(self):
+        return f'<Author {self.id}|{self.name}>'

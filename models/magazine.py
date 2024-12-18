@@ -1,60 +1,126 @@
-from sqlalchemy import Column, Integer, String
-from sqlalchemy.orm import relationship
-from database.connection import session
-from sqlalchemy.sql import func
-from database.connection import Base
-class Magazine(Base):
-    __tablename__ = "magazines"
+from database.connection import get_db_connection
+from models.article import Article
+from models.author import Author
 
-    id =Column(Integer,primary_key=True)
-    name=Column(String,nullable=False,unique=True)
-    Category=Column(String, nullable=False)
+class Magazine:
+    def __init__(self, id, name="", category=""):
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    articles= relationship('Article', backref="magazine")
-    def __init__(self, id, name, category):
-        self.id = id
-        self.name = name
-        self.category = category
+        # Check if the magazine already exists
+        cursor.execute("SELECT * FROM magazines WHERE id = ? LIMIT 1", [id])
+        magazine = cursor.fetchone()
 
-    def __repr__(self):
-        return f'<Magazine {self.name}>'
-    
+        if magazine:
+            self._id = magazine['id']
+            self._name = magazine['name']
+            self._category = magazine['category']
+        else:
+            # Insert new magazine if it doesn't exist
+            cursor.execute('INSERT INTO magazines (name, category) VALUES (?, ?)', (name, category))
+            conn.commit()
+            self._id = cursor.lastrowid
+            self._name = name
+            self._category = category
+
+        cursor.close()
+        conn.close()
+
+    @property
+    def id(self):
+        return self._id
+
+    @id.setter
+    def id(self, value):
+        raise ValueError("ID is immutable and cannot be changed.")
+
     @property
     def name(self):
         return self._name
 
     @name.setter
-    def name(self,name):
-        if not isinstance(name,str) and not 2 <=(len(name))<= 16:
-            raise ValueError("name must be a string and between 2 an16 character long")
-        self._name =name
+    def name(self, value):
+        if not isinstance(value, str):
+            raise TypeError("Name must be a string.")
+        if len(value) < 2 or len(value) > 16:
+            raise ValueError("Name must be between 2 and 16 characters.")
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE magazines SET name = ? WHERE id = ?", (value, self._id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        self._name = value
+
     @property
     def category(self):
         return self._category
 
     @category.setter
-    def category(self,category):
-        if not isinstance(category,str) and not len(name)> 0:
-            raise ValueError("name must be a string and not empty")
-        self._category =category
-    def articles(self,session):
-        return session.query(Article).join(Magazine).filter(Article.magazine_id==self.id).all()
+    def category(self, value):
+        if not isinstance(value, str):
+            raise TypeError("Category must be a string.")
+        if len(value) < 1:
+            raise ValueError("Category must not be empty.")
 
-    def contributors(self,session):
-        return session.query(Author).join(Article).filter(Article.magazine_id==self.id).all()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE magazines SET category = ? WHERE id = ?", (value, self._id))
+        conn.commit()
+        cursor.close()
+        conn.close()
 
+        self._category = value
+
+    def contributors(self):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT author_id FROM articles WHERE magazine_id = ?", [self._id])
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return [Author(row['author_id']) for row in rows]
+
+    def articles(self):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM articles WHERE magazine_id = ?", [self._id])
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return [Article(row['id']) for row in rows]
 
     def article_titles(self):
-        titles = [article.title for article in self.articles]
-        return titles if titles else None
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT title FROM articles WHERE magazine_id = ?", [self._id])
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
 
-    def contributing_authors(self, session):
-        results = (
-            session.query(Author)
-            .join(Article)
-            .filter(Article.magazine_id == self.id)
-            .group_by(Author.id)
-            .having(func.count(Article.id) > 2)
-            .all()
-        )
-        return results if results else None
+        return [row["title"] for row in rows] if rows else None
+
+    def contributing_authors(self):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT a.*, COUNT(DISTINCT m.id) AS magazine_count
+            FROM authors a
+            JOIN articles ar ON ar.author_id = a.id
+            JOIN magazines m ON m.id = ar.magazine_id
+            WHERE m.id = ?
+            GROUP BY a.id
+            HAVING magazine_count > 2
+        ''', [self._id])
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return [Author(row["id"]) for row in rows]
+
+    def __repr__(self):
+        return f'<Magazine {self._id}|{self._name}|{self._category}>'
